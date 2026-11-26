@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Баскетбол — интерактивный журнал</title>
+  <style>
+    *{box-sizing:border-box}
+    :root{
+      --narrow-factor:.653608;
+      --turn-time:760ms;
+      --paper:#f4f0e5;
+    }
+    html,body{margin:0;min-height:100%;background:#EDEDED;color:#171717}
+    body{font-family:Arial,Helvetica,sans-serif;overflow-x:hidden}
+    .magazine-app{min-height:100vh;min-height:100dvh;display:grid;place-items:center;padding:22px 14px 18px}
+    .magazine-wrap{width:100%}
+    .stage{
+      position:relative;
+      height:calc(100vh - 132px);
+      height:calc(100dvh - 132px);
+      max-height:820px;
+      width:auto;
+      aspect-ratio:4850 / 3445;
+      margin:0 auto;
+      perspective:2400px;
+    }
+    .book{
+      position:absolute;
+      inset:0;
+      transform-style:preserve-3d;
+      transition:transform 540ms cubic-bezier(.4,0,.2,1);
+    }
+    .stage.is-front .book{transform:translateX(-25%)}
+    .stage.is-back .book{transform:translateX(25%)}
+    .shadow{
+      position:absolute;
+      z-index:0;
+      left:7%;right:7%;bottom:-15px;height:28px;
+      border-radius:50%;background:rgba(25,21,17,.28);filter:blur(16px);
+      transition:left 540ms,right 540ms,opacity 540ms;
+    }
+    .stage.is-front .shadow,.stage.is-back .shadow{left:29%;right:29%;opacity:.82}
+    .sheet{
+      position:absolute;
+      z-index:1;
+      top:0;left:50%;height:100%;
+      width:calc(50% * var(--sheet-factor,1));
+      transform-origin:left center;
+      transform-style:preserve-3d;
+      transform:rotateY(0deg);
+      transition:transform var(--turn-time) cubic-bezier(.58,.02,.28,1);
+      will-change:transform;
+    }
+    .sheet.turned{transform:rotateY(-180deg)}
+    .face{
+      position:absolute;inset:0;overflow:hidden;
+      background:var(--paper);
+      backface-visibility:hidden;-webkit-backface-visibility:hidden;
+      box-shadow:0 0 0 1px rgba(0,0,0,.045);
+    }
+    .face.back{transform:rotateY(180deg)}
+    .face img{display:block;width:100%;height:100%;object-fit:fill}
+    /* Единственный объём на самих страницах — мягкий сгиб у корешка. */
+    .face::after{
+      content:"";position:absolute;top:0;bottom:0;width:8%;pointer-events:none;opacity:.72;
+    }
+    .face.front::after{left:0;background:linear-gradient(90deg,rgba(0,0,0,.22),transparent)}
+    .face.back::after{right:0;background:linear-gradient(270deg,rgba(0,0,0,.22),transparent)}
+    .stage.is-front .sheet:first-child .face.front::after,
+    .stage.is-back .sheet:last-child .face.back::after{opacity:.25}
+    .controls{display:flex;justify-content:center;align-items:center;gap:18px;margin-top:27px}
+    button{
+      width:52px;height:52px;border:1px solid rgba(0,0,0,.34);border-radius:50%;
+      background:rgba(255,255,255,.14);color:#171717;font-size:25px;line-height:1;
+      cursor:pointer;transition:background .2s,opacity .2s,transform .2s;
+    }
+    button:hover:not(:disabled){background:rgba(255,255,255,.58);transform:scale(1.04)}
+    button:disabled{opacity:.22;cursor:default}
+    .counter{min-width:116px;text-align:center;font-size:13px;letter-spacing:.04em}
+    .hint{text-align:center;margin-top:13px;font-size:11px;opacity:.55}
+    @media(max-aspect-ratio:3/2){
+      .stage{width:96vw;height:auto;max-height:none}
+    }
+    @media(max-width:700px){
+      .magazine-app{padding-inline:5px}.magazine-wrap{width:100%}
+      .controls{margin-top:24px}.shadow{bottom:-9px;height:18px;filter:blur(10px)}
+      button{width:46px;height:46px}.hint{display:none}
+    }
+    @media(prefers-reduced-motion:reduce){.sheet,.book,.shadow{transition-duration:1ms!important}}
+  </style>
+</head>
+<body>
+  <main class="magazine-app">
+    <div class="magazine-wrap">
+      <div class="stage is-front" id="stage" aria-label="Интерактивный журнал о баскетболе">
+        <div class="shadow"></div>
+        <div class="book" id="book"></div>
+      </div>
+      <nav class="controls" aria-label="Навигация по журналу">
+        <button id="prev" type="button" aria-label="Предыдущий разворот">&#8592;</button>
+        <span class="counter" id="counter" aria-live="polite">Обложка</span>
+        <button id="next" type="button" aria-label="Следующий разворот">&#8594;</button>
+      </nav>
+      <div class="hint">Можно использовать стрелки клавиатуры или свайп</div>
+    </div>
+  </main>
+  <script>
+    (()=>{
+      const PAGE_COUNT=68;
+      const NARROW=new Set([5,6,7,8,21,22,23,24,25,26,27,28,55,56,57,58]);
+      const filename=n=>n===1?'page-01-cover-front.webp':n===68?'page-68-cover-back.webp':`page-${String(n).padStart(2,'0')}.webp`;
+      const book=document.querySelector('#book');
+      const stage=document.querySelector('#stage');
+      const prev=document.querySelector('#prev');
+      const next=document.querySelector('#next');
+      const counter=document.querySelector('#counter');
+      const sheets=[];
+      let position=0,locked=false,touchX=0;
+
+      for(let front=1;front<=PAGE_COUNT;front+=2){
+        const back=front+1;
+        const sheet=document.createElement('div');
+        sheet.className='sheet';
+        sheet.style.setProperty('--sheet-factor',NARROW.has(front)?'var(--narrow-factor)':'1');
+        sheet.innerHTML=`
+          <div class="face front"><img data-page="${front}" alt="Страница ${front}"></div>
+          <div class="face back"><img data-page="${back}" alt="Страница ${back}"></div>`;
+        book.appendChild(sheet);sheets.push(sheet);
+      }
+
+      function loadAround(){
+        const from=Math.max(0,position-2),to=Math.min(sheets.length-1,position+2);
+        for(let i=from;i<=to;i++){
+          sheets[i].querySelectorAll('img:not([src])').forEach(img=>{
+            const n=Number(img.dataset.page);img.src=`assets/${filename(n)}`;img.decoding='async';
+          });
+        }
+      }
+      function label(){
+        if(position===0)return'Обложка';
+        if(position===sheets.length)return'Задняя обложка';
+        return `${position*2}–${position*2+1} / ${PAGE_COUNT}`;
+      }
+      function render(active=-1){
+        sheets.forEach((sheet,i)=>{
+          sheet.classList.toggle('turned',i<position);
+          sheet.style.zIndex=i===active?'100':String(i<position?i+2:sheets.length-i+2);
+        });
+        stage.classList.toggle('is-front',position===0);
+        stage.classList.toggle('is-back',position===sheets.length);
+        prev.disabled=position===0;next.disabled=position===sheets.length;
+        counter.textContent=label();loadAround();
+      }
+      function move(delta){
+        if(locked)return;
+        const target=Math.max(0,Math.min(sheets.length,position+delta));
+        if(target===position)return;
+        const active=delta>0?position:position-1;
+        position=target;locked=true;render(active);
+        window.setTimeout(()=>{locked=false;render()},790);
+      }
+      prev.addEventListener('click',()=>move(-1));next.addEventListener('click',()=>move(1));
+      document.addEventListener('keydown',e=>{
+        if(e.key==='ArrowLeft')move(-1);if(e.key==='ArrowRight')move(1);
+      });
+      stage.addEventListener('touchstart',e=>{touchX=e.changedTouches[0].clientX},{passive:true});
+      stage.addEventListener('touchend',e=>{
+        const d=e.changedTouches[0].clientX-touchX;if(Math.abs(d)>42)move(d<0?1:-1);
+      },{passive:true});
+      render();
+    })();
+  </script>
+</body>
+</html>
