@@ -3,15 +3,15 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Баскетбол — интерактивный журнал</title>
+  <title>Вода — интерактивная книга</title>
   <style>
     *{box-sizing:border-box}
     :root{
-      --narrow-factor:.653608;
+      
       --turn-time:760ms;
       --paper:#f4f0e5;
     }
-    html,body{margin:0;min-height:100%;background:#EDEDED;color:#171717}
+    html,body{margin:0;min-height:100%;background:#fff;color:#171717}
     body{font-family:Arial,Helvetica,sans-serif;overflow-x:hidden}
     .magazine-app{min-height:100vh;min-height:100dvh;display:grid;place-items:center;padding:22px 14px 18px}
     .magazine-wrap{width:100%}
@@ -21,7 +21,7 @@
       height:calc(100dvh - 132px);
       max-height:820px;
       width:auto;
-      aspect-ratio:4850 / 3445;
+      aspect-ratio:5480 / 3969;
       margin:0 auto;
       perspective:2400px;
     }
@@ -45,7 +45,7 @@
       position:absolute;
       z-index:1;
       top:0;left:50%;height:100%;
-      width:calc(50% * var(--sheet-factor,1));
+      width:50%;
       transform-origin:left center;
       transform-style:preserve-3d;
       transform:rotateY(0deg);
@@ -60,7 +60,13 @@
       box-shadow:0 0 0 1px rgba(0,0,0,.045);
     }
     .face.back{transform:rotateY(180deg)}
-    .face img{display:block;width:100%;height:100%;object-fit:fill}
+    .face img{display:block;width:100%;height:100%;max-width:none;object-fit:fill;user-select:none;-webkit-user-drag:none}
+    .face img.spread{width:200%}
+    .face img.spread-right{transform:translateX(-50%)}
+    button{background:#fff;border-color:#000;color:#000}
+    button:active:not(:disabled){background:#000!important;color:#fff}
+    button:focus-visible{outline:2px solid #000;outline-offset:4px}
+    .load-error{text-align:center;color:#a02020;font-size:13px}
     /* Единственный объём на самих страницах — мягкий сгиб у корешка. */
     .face::after{
       content:"";position:absolute;top:0;bottom:0;width:8%;pointer-events:none;opacity:.72;
@@ -93,83 +99,156 @@
 <body>
   <main class="magazine-app">
     <div class="magazine-wrap">
-      <div class="stage is-front" id="stage" aria-label="Интерактивный журнал о баскетболе">
+      <div class="stage is-front" id="stage" aria-label="Интерактивная книга о воде">
         <div class="shadow"></div>
         <div class="book" id="book"></div>
       </div>
-      <nav class="controls" aria-label="Навигация по журналу">
+      <nav class="controls" aria-label="Навигация по книге">
         <button id="prev" type="button" aria-label="Предыдущий разворот">&#8592;</button>
         <span class="counter" id="counter" aria-live="polite">Обложка</span>
         <button id="next" type="button" aria-label="Следующий разворот">&#8594;</button>
       </nav>
+      <p class="load-error" id="load-error" role="status" hidden></p>
       <div class="hint">Можно использовать стрелки клавиатуры или свайп</div>
     </div>
   </main>
   <script>
-    (()=>{
-      const PAGE_COUNT=68;
-      const NARROW=new Set([5,6,7,8,21,22,23,24,25,26,27,28,55,56,57,58]);
-      const filename=n=>n===1?'page-01-cover-front.webp':n===68?'page-68-cover-back.webp':`page-${String(n).padStart(2,'0')}.webp`;
-      const book=document.querySelector('#book');
-      const stage=document.querySelector('#stage');
-      const prev=document.querySelector('#prev');
-      const next=document.querySelector('#next');
-      const counter=document.querySelector('#counter');
-      const sheets=[];
-      let position=0,locked=false,touchX=0;
+    (() => {
+      // 2 обложки + 35 разворотов по 2 страницы = 72 стороны.
+      const PAGE_COUNT = 72;
+      const book = document.querySelector('#book');
+      const stage = document.querySelector('#stage');
+      const prev = document.querySelector('#prev');
+      const next = document.querySelector('#next');
+      const counter = document.querySelector('#counter');
+      const error = document.querySelector('#load-error');
+      const sheets = [];
+      const imageLoads = new Map();
+      let position = 0, locked = false, touchX = 0;
 
-      for(let front=1;front<=PAGE_COUNT;front+=2){
-        const back=front+1;
-        const sheet=document.createElement('div');
-        sheet.className='sheet';
-        sheet.style.setProperty('--sheet-factor',NARROW.has(front)?'var(--narrow-factor)':'1');
-        sheet.innerHTML=`
-          <div class="face front"><img data-page="${front}" alt="Страница ${front}"></div>
-          <div class="face back"><img data-page="${back}" alt="Страница ${back}"></div>`;
-        book.appendChild(sheet);sheets.push(sheet);
+      function pageSource(page) {
+        if (page === 1) return { file: 'page-01-cover-front.webp', side: '' };
+        if (page === PAGE_COUNT) return { file: 'page-37-cover-back.webp', side: '' };
+        const spread = Math.floor((page - 2) / 2) + 2;
+        return {
+          file: `page-${String(spread).padStart(2, '0')}.webp`,
+          side: page % 2 === 0 ? 'left' : 'right'
+        };
       }
 
-      function loadAround(){
-        const from=Math.max(0,position-2),to=Math.min(sheets.length-1,position+2);
-        for(let i=from;i<=to;i++){
-          sheets[i].querySelectorAll('img:not([src])').forEach(img=>{
-            const n=Number(img.dataset.page);img.src=`assets/${filename(n)}`;img.decoding='async';
-          });
+      function createFace(page, side) {
+        const face = document.createElement('div');
+        face.className = `face ${side}`;
+        const image = document.createElement('img');
+        const source = pageSource(page);
+        image.dataset.file = source.file;
+        image.alt = page === 1 ? 'Передняя обложка' :
+          page === PAGE_COUNT ? 'Задняя обложка' : `Страница ${page}`;
+        image.draggable = false;
+        if (source.side) image.className = `spread spread-${source.side}`;
+        face.appendChild(image);
+        return face;
+      }
+
+      for (let front = 1; front <= PAGE_COUNT; front += 2) {
+        const sheet = document.createElement('div');
+        sheet.className = 'sheet';
+        sheet.append(createFace(front, 'front'), createFace(front + 1, 'back'));
+        book.appendChild(sheet);
+        sheets.push(sheet);
+      }
+
+      function loadImage(image) {
+        if (imageLoads.has(image)) return imageLoads.get(image);
+        const task = new Promise((resolve, reject) => {
+          image.onload = async () => {
+            try { if (image.decode) await image.decode(); } catch (_) {}
+            resolve();
+          };
+          image.onerror = () => reject(new Error(image.dataset.file));
+          // Файлы лежат рядом с index.html, папка assets не требуется.
+          image.src = new URL(image.dataset.file, document.baseURI).href;
+        });
+        imageLoads.set(image, task);
+        task.catch(() => imageLoads.delete(image));
+        return task;
+      }
+
+      function loadAround(at) {
+        const tasks = [];
+        for (let i = Math.max(0, at - 2); i <= Math.min(sheets.length - 1, at + 2); i++) {
+          sheets[i].querySelectorAll('img').forEach(img => tasks.push(loadImage(img)));
+        }
+        return Promise.all(tasks);
+      }
+
+      function render(active = -1) {
+        sheets.forEach((sheet, i) => {
+          sheet.classList.toggle('turned', i < position);
+          sheet.style.zIndex = i === active ? '100' :
+            String(i < position ? i + 2 : sheets.length - i + 2);
+        });
+        stage.classList.toggle('is-front', position === 0);
+        stage.classList.toggle('is-back', position === sheets.length);
+        counter.textContent = position === 0 ? 'Обложка' :
+          position === sheets.length ? 'Задняя обложка' :
+          `Разворот ${position} / 35`;
+      }
+
+      function reportFailure(reason) {
+        error.textContent = `Не удалось загрузить ${reason.message}. Проверьте файл и попробуйте ещё раз.`;
+        error.hidden = false;
+      }
+
+      async function move(delta) {
+        if (locked) return;
+        const target = (position + delta + sheets.length + 1) % (sheets.length + 1);
+        const wrapping = Math.abs(target - position) > 1;
+        const active = delta > 0 ? position : position - 1;
+        locked = true;
+        stage.setAttribute('aria-busy', 'true');
+        error.hidden = true;
+        try {
+          await Promise.all([loadAround(position), loadAround(target)]);
+          if (wrapping) {
+            const animated = [...sheets, book, document.querySelector('.shadow')];
+            animated.forEach(el => el.style.setProperty('transition', 'none', 'important'));
+            position = target;
+            render();
+            void stage.offsetWidth;
+            animated.forEach(el => el.style.removeProperty('transition'));
+          } else {
+            position = target;
+            render(active);
+            await new Promise(resolve => setTimeout(resolve,
+              matchMedia('(prefers-reduced-motion: reduce)').matches ? 20 : 790));
+            render();
+          }
+        } catch (reason) {
+          reportFailure(reason);
+        } finally {
+          locked = false;
+          stage.setAttribute('aria-busy', 'false');
         }
       }
-      function label(){
-        if(position===0)return'Обложка';
-        if(position===sheets.length)return'Задняя обложка';
-        return `${position*2}–${position*2+1} / ${PAGE_COUNT}`;
-      }
-      function render(active=-1){
-        sheets.forEach((sheet,i)=>{
-          sheet.classList.toggle('turned',i<position);
-          sheet.style.zIndex=i===active?'100':String(i<position?i+2:sheets.length-i+2);
-        });
-        stage.classList.toggle('is-front',position===0);
-        stage.classList.toggle('is-back',position===sheets.length);
-        prev.disabled=position===0;next.disabled=position===sheets.length;
-        counter.textContent=label();loadAround();
-      }
-      function move(delta){
-        if(locked)return;
-        const target=Math.max(0,Math.min(sheets.length,position+delta));
-        if(target===position)return;
-        const active=delta>0?position:position-1;
-        position=target;locked=true;render(active);
-        window.setTimeout(()=>{locked=false;render()},790);
-      }
-      prev.addEventListener('click',()=>move(-1));next.addEventListener('click',()=>move(1));
-      document.addEventListener('keydown',e=>{
-        if(e.key==='ArrowLeft')move(-1);if(e.key==='ArrowRight')move(1);
+
+      prev.addEventListener('click', () => move(-1));
+      next.addEventListener('click', () => move(1));
+      document.addEventListener('keydown', event => {
+        if (event.target.closest('input,textarea,select,[contenteditable="true"]')) return;
+        if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+          event.preventDefault();
+          move(event.key === 'ArrowLeft' ? -1 : 1);
+        }
       });
-      stage.addEventListener('touchstart',e=>{touchX=e.changedTouches[0].clientX},{passive:true});
-      stage.addEventListener('touchend',e=>{
-        const d=e.changedTouches[0].clientX-touchX;if(Math.abs(d)>42)move(d<0?1:-1);
-      },{passive:true});
+      stage.addEventListener('touchstart', e => { touchX = e.changedTouches[0].clientX; }, { passive: true });
+      stage.addEventListener('touchend', e => {
+        const d = e.changedTouches[0].clientX - touchX;
+        if (Math.abs(d) > 42) move(d < 0 ? 1 : -1);
+      }, { passive: true });
       render();
+      loadAround(0).catch(reportFailure);
     })();
-  </script>
+</script>
 </body>
 </html>
